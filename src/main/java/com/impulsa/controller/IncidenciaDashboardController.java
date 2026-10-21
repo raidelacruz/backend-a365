@@ -145,7 +145,9 @@ public class IncidenciaDashboardController {
                 "host", emailService.getSmtpHost(),
                 "port", emailService.getSmtpPort(),
                 "username", emailService.getSmtpUsername() != null ? emailService.getSmtpUsername() : "",
-                "configurado", emailService.isSmtpConfigurado()
+                "configurado", emailService.isSmtpConfigurado(),
+                "proveedor", emailService.getMailProvider(),
+                "correoConfigurado", emailService.isCorreoConfigurado()
         ));
     }
 

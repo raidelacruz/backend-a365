@@ -13,6 +13,22 @@ import java.util.Properties;
 @Service
 public class EmailNotificationService {
 
+    private final BrevoEmailSender brevo;
+
+    public EmailNotificationService(BrevoEmailSender brevo) {
+        this.brevo = brevo;
+    }
+
+    @Value("${app.mail.provider:smtp}")
+    private String mailProvider;
+
+    public boolean isCorreoConfigurado() {
+        return "brevo".equalsIgnoreCase(mailProvider) ? brevo.isConfigured()
+                : "smtp".equalsIgnoreCase(mailProvider) && isSmtpConfigurado();
+    }
+
+    public String getMailProvider() { return mailProvider; }
+
     @Value("${spring.mail.host:smtp.gmail.com}")
     private String smtpHost;
 
@@ -136,6 +152,8 @@ public class EmailNotificationService {
     }
 
     private boolean enviarCorreoReal(String destino, String asunto, String html) {
+        if ("brevo".equalsIgnoreCase(mailProvider)) return brevo.send(destino, asunto, html);
+        if (!"smtp".equalsIgnoreCase(mailProvider)) return false;
         if (!isSmtpConfigurado()) {
             return false;
         }
