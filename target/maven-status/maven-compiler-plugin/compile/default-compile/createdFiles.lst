@@ -1,8 +1,0 @@
-com\impulsa\service\EmailNotificationService.class
-com\impulsa\controller\UsuarioController.class
-com\impulsa\config\CorsConfig.class
-com\impulsa\config\CorsConfig$1.class
-com\impulsa\controller\AuthController.class
-com\impulsa\controller\TicketController.class
-com\impulsa\ImpulsaBackendApplication.class
-com\impulsa\controller\IncidenciaDashboardController.class
