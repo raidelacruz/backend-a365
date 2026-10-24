@@ -15,9 +15,23 @@ public class Access {
     public boolean role(Authentication auth, String role) { return auth != null && auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_" + role)); }
     public boolean staff(Authentication auth) { return role(auth, "ADMINISTRADOR") || role(auth, "SUPERVISOR") || role(auth, "EMPLEADO"); }
     public boolean canReadTicket(Long id, Authentication auth) {
-        if (staff(auth)) return true;
+        if (role(auth, "ADMINISTRADOR") || role(auth, "SUPERVISOR")) return true;
+        if (canAttendTicket(id, auth)) return true;
         if (auth == null || !(auth.getPrincipal() instanceof SessionUser user)) return false;
         Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM tickets WHERE id_ticket = ? AND id_usuario_creador = ?", Integer.class, id, user.id());
         return count != null && count > 0;
     }
+
+    public boolean canAttendTicket(Long id, Authentication auth) {
+        if (!role(auth, "EMPLEADO") || !(auth.getPrincipal() instanceof SessionUser user)) return false;
+        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM tickets t JOIN empleados e ON e.id_empleado = t.id_empleado_asignado WHERE t.id_ticket = ? AND e.id_usuario = ? AND t.id_usuario_creador <> ?",
+                Integer.class, id, user.id(), user.id());
+        return count != null && count > 0;
+    }
+
+    public boolean canReadInternal(Long id, Authentication auth) {
+        return role(auth, "ADMINISTRADOR") || role(auth, "SUPERVISOR") || canAttendTicket(id, auth);
+    }
+
+    public Authentication authentication() { return SecurityContextHolder.getContext().getAuthentication(); }
 }

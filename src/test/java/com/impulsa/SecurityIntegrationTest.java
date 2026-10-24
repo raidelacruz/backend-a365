@@ -47,6 +47,8 @@ class SecurityIntegrationTest {
         doReturn(Optional.of(account(3,"EMPLEADO"))).when(accounts).byId(3);
         doReturn(Optional.of(account(6,"CLIENTE"))).when(accounts).byId(6);
         when(email.enviarCodigo2FA(anyString(),anyString(),anyString())).thenReturn(true);
+        when(jdbc.queryForList("SELECT * FROM tickets WHERE id_ticket = ? FOR UPDATE", 10L))
+            .thenReturn(List.of(ticket("ABIERTO")));
     }
     private org.springframework.test.web.servlet.request.RequestPostProcessor actor(int id,String role) {
         return authentication(UsernamePasswordAuthenticationToken.authenticated(new SessionUser(id,role,hash),null,List.of(new SimpleGrantedAuthority("ROLE_"+role))));
@@ -140,7 +142,7 @@ class SecurityIntegrationTest {
         mvc.perform(post("/api/tickets/10/mensajes").with(actor(6,"CLIENTE")).with(csrf()).contentType("application/json")
             .content("{\"contenido\":\"Ayuda\",\"idUsuario\":1,\"autorRol\":\"ADMINISTRADOR\",\"autorNombre\":\"Falso\"}"))
             .andExpect(status().isCreated());
-        verify(jdbc).update(contains("INSERT INTO ticket_mensajes"),eq(10L),eq(6),eq("Usuario Prueba"),eq("CLIENTE"),eq("Ayuda"));
+        verify(jdbc).update(contains("INSERT INTO ticket_mensajes"),eq(10L),eq(6),eq("Usuario Prueba"),eq("CLIENTE"),eq(false),eq("Ayuda"));
     }
     @Test void recoveryUsesSessionChallengeAndStoresNewBcryptHash() throws Exception {
         doReturn(Optional.of(account(6,"CLIENTE"))).when(accounts).byLogin("u6@example.test");
@@ -179,6 +181,115 @@ class SecurityIntegrationTest {
             .andExpect(status().isBadRequest());
         mvc.perform(post("/api/auth/verify-2fa").session(session).with(csrf()).contentType("application/json").content(json.writeValueAsString(Map.of("codigoOtp",code.getValue()))))
             .andExpect(status().isBadRequest());
+    }
+    private Map<String,Object> ticket(String state) {
+        return new HashMap<>(Map.of("estado", state, "id_usuario_creador", 6,
+                "id_empleado_asignado", 7, "prioridad", "Media"));
+    }
+    private void assignedToEmployee() {
+        when(jdbc.queryForObject(contains("JOIN empleados e"), eq(Integer.class), eq(10L), eq(3), eq(3))).thenReturn(1);
+    }
+    @Test void employeeInboxIsScopedEvenWhenSpoofingOwnerFilter() throws Exception {
+        mvc.perform(get("/api/tickets").with(actor(3,"EMPLEADO"))).andExpect(status().isOk());
+        verify(jdbc).queryForList(contains("WHERE agente.id_usuario = ?"), eq(3), eq(3));
+        mvc.perform(get("/api/tickets?idUsuario=1").with(actor(3,"EMPLEADO"))).andExpect(status().isOk());
+        verify(jdbc).queryForList(contains("WHERE t.id_usuario_creador = ?"), eq(3));
+    }
+    @Test void unassignedEmployeeCannotReadConversationOrHistoryOrModifyTicket() throws Exception {
+        mvc.perform(get("/api/tickets/10/mensajes").with(actor(3,"EMPLEADO"))).andExpect(status().isForbidden());
+        mvc.perform(get("/api/tickets/10/historial").with(actor(3,"EMPLEADO"))).andExpect(status().isForbidden());
+        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"EMPLEADO")).with(csrf()).contentType("application/json")
+                .content("{\"estado\":\"EN_PROCESO\",\"motivo\":\"Intento ajeno\"}")).andExpect(status().isForbidden());
+        verify(jdbc,never()).update(contains("UPDATE tickets"), any(Object[].class));
+    }
+    @Test void assignedAgentMustStartBeforeResolvingAndCannotAssignOrClose() throws Exception {
+        assignedToEmployee();
+        when(jdbc.queryForList("SELECT * FROM tickets WHERE id_ticket = ? FOR UPDATE", 10L)).thenReturn(List.of(ticket("ASIGNADO")));
+        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"EMPLEADO")).with(csrf()).contentType("application/json")
+                .content("{\"estado\":\"RESUELTO\",\"motivo\":\"Sin iniciar\"}")).andExpect(status().isConflict());
+        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"EMPLEADO")).with(csrf()).contentType("application/json")
+                .content("{\"estado\":\"EN_PROCESO\",\"motivo\":\"Diagnóstico iniciado\"}")).andExpect(status().isOk());
+        when(jdbc.queryForList("SELECT * FROM tickets WHERE id_ticket = ? FOR UPDATE", 10L)).thenReturn(List.of(ticket("EN_PROCESO")));
+        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"EMPLEADO")).with(csrf()).contentType("application/json")
+                .content("{\"estado\":\"RESUELTO\",\"motivo\":\"Acceso restaurado\"}")).andExpect(status().isOk());
+        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"EMPLEADO")).with(csrf()).contentType("application/json")
+                .content("{\"estado\":\"CERRADO\",\"motivo\":\"Cerrar\"}")).andExpect(status().isConflict());
+        mvc.perform(patch("/api/tickets/10/asignacion").with(actor(3,"EMPLEADO")).with(csrf()).contentType("application/json").content("{}"))
+                .andExpect(status().isForbidden());
+        verify(jdbc).update(contains("INSERT INTO ticket_historial"), eq(10L), eq(3), eq("CAMBIO_ESTADO"), eq("EN_PROCESO"), eq("RESUELTO"), eq("Acceso restaurado"));
+    }
+    @Test void onlySupervisorCanAssignActiveSupportAgentAndPriority() throws Exception {
+        when(jdbc.queryForList(contains("FOR SHARE OF u, e"), eq(8))).thenReturn(List.of(Map.of("id_usuario", 3)));
+        mvc.perform(patch("/api/tickets/10/asignacion").with(actor(2,"SUPERVISOR")).with(csrf()).contentType("application/json")
+                .content("{\"idEmpleado\":8,\"prioridad\":\"Alta\",\"motivo\":\"Especialista disponible\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.estado").value("ASIGNADO"));
+        verify(jdbc).update(contains("UPDATE tickets SET id_empleado_asignado"), eq(8), eq("Alta"), eq("ASIGNADO"), eq(false), eq(10L));
+        mvc.perform(patch("/api/tickets/10/asignacion").with(actor(1,"ADMINISTRADOR")).with(csrf()).contentType("application/json").content("{}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/tickets/agentes").with(actor(6,"CLIENTE"))).andExpect(status().isForbidden());
+    }
+    @Test void assignmentRejectsInactiveAgentAndSelfAssignmentAndTerminalTickets() throws Exception {
+        mvc.perform(patch("/api/tickets/10/asignacion").with(actor(2,"SUPERVISOR")).with(csrf()).contentType("application/json")
+                .content("{\"idEmpleado\":8,\"motivo\":\"Inactivo\"}")).andExpect(status().isBadRequest());
+        when(jdbc.queryForList(contains("FOR SHARE OF u, e"), eq(8))).thenReturn(List.of(Map.of("id_usuario", 6)));
+        mvc.perform(patch("/api/tickets/10/asignacion").with(actor(2,"SUPERVISOR")).with(csrf()).contentType("application/json")
+                .content("{\"idEmpleado\":8,\"motivo\":\"Propio\"}")).andExpect(status().isBadRequest());
+        when(jdbc.queryForList("SELECT * FROM tickets WHERE id_ticket = ? FOR UPDATE", 10L)).thenReturn(List.of(ticket("RESUELTO")));
+        mvc.perform(patch("/api/tickets/10/asignacion").with(actor(2,"SUPERVISOR")).with(csrf()).contentType("application/json")
+                .content("{\"idEmpleado\":8,\"motivo\":\"Cerrado\"}")).andExpect(status().isConflict());
+    }
+    @Test void historicalOpenTicketWithSameAgentBecomesAssignedAndReopenClearsAssignment() throws Exception {
+        when(jdbc.queryForList(contains("FOR SHARE OF u, e"), eq(7))).thenReturn(List.of(Map.of("id_usuario", 3)));
+        mvc.perform(patch("/api/tickets/10/asignacion").with(actor(2,"SUPERVISOR")).with(csrf()).contentType("application/json")
+                .content("{\"idEmpleado\":7,\"motivo\":\"Confirmar asignación histórica\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.estado").value("ASIGNADO"));
+        when(jdbc.queryForList("SELECT * FROM tickets WHERE id_ticket = ? FOR UPDATE", 10L)).thenReturn(List.of(ticket("CERRADO")));
+        mvc.perform(patch("/api/tickets/10/estado").with(actor(2,"SUPERVISOR")).with(csrf()).contentType("application/json")
+                .content("{\"estado\":\"ABIERTO\",\"motivo\":\"Reaparece el problema\"}")).andExpect(status().isOk());
+        verify(jdbc).update(contains("id_empleado_asignado = CASE WHEN ? = 'ABIERTO' THEN NULL"),
+                eq("ABIERTO"), eq("ABIERTO"), eq("ABIERTO"), eq("ABIERTO"), eq(10L));
+    }
+    @Test void supervisorCannotDoAgentWorkAndAdminHasReadOnlyTicketAccess() throws Exception {
+        mvc.perform(patch("/api/tickets/10/estado").with(actor(2,"SUPERVISOR")).with(csrf()).contentType("application/json")
+                .content("{\"estado\":\"EN_PROCESO\",\"motivo\":\"Atender\"}")).andExpect(status().isConflict());
+        mvc.perform(patch("/api/tickets/10/estado").with(actor(1,"ADMINISTRADOR")).with(csrf()).contentType("application/json")
+                .content("{\"estado\":\"RESUELTO\",\"motivo\":\"Resolver\"}")).andExpect(status().isForbidden());
+        mvc.perform(post("/api/tickets/10/mensajes").with(actor(1,"ADMINISTRADOR")).with(csrf()).contentType("application/json")
+                .content("{\"contenido\":\"Respuesta\"}")).andExpect(status().isForbidden());
+    }
+    @Test void ownerConfirmsResolvedTicketButCannotSeeOrPublishInternalNotes() throws Exception {
+        when(jdbc.queryForObject(contains("SELECT COUNT(*) FROM tickets"), eq(Integer.class), eq(10L), eq(6))).thenReturn(1);
+        when(jdbc.queryForList("SELECT * FROM tickets WHERE id_ticket = ? FOR UPDATE", 10L)).thenReturn(List.of(ticket("RESUELTO")));
+        mvc.perform(post("/api/tickets/10/mensajes").with(actor(6,"CLIENTE")).with(csrf()).contentType("application/json")
+                .content("{\"contenido\":\"Oculto\",\"esInterno\":true}")).andExpect(status().isForbidden());
+        mvc.perform(get("/api/tickets/10/historial").with(actor(6,"CLIENTE"))).andExpect(status().isForbidden());
+        mvc.perform(patch("/api/tickets/10/estado").with(actor(6,"CLIENTE")).with(csrf()).contentType("application/json")
+                .content("{\"estado\":\"CERRADO\",\"motivo\":\"Confirmo que funciona\"}")).andExpect(status().isOk());
+    }
+    @Test void agentCanPublishInternalNoteAndClosedConversationsRejectWrites() throws Exception {
+        assignedToEmployee();
+        mvc.perform(post("/api/tickets/10/mensajes").with(actor(3,"EMPLEADO")).with(csrf()).contentType("application/json")
+                .content("{\"contenido\":\"Diagnóstico privado\",\"esInterno\":true}")).andExpect(status().isCreated());
+        verify(jdbc).update(contains("INSERT INTO ticket_mensajes"), eq(10L), eq(3), eq("Usuario Prueba"), eq("EMPLEADO"), eq(true), eq("Diagnóstico privado"));
+        when(jdbc.queryForList("SELECT * FROM tickets WHERE id_ticket = ? FOR UPDATE", 10L)).thenReturn(List.of(ticket("CERRADO")));
+        mvc.perform(post("/api/tickets/10/mensajes").with(actor(3,"EMPLEADO")).with(csrf()).contentType("application/json")
+                .content("{\"contenido\":\"Fuera de plazo\"}")).andExpect(status().isConflict());
+    }
+    @Test void incidentReviewIsExclusiveToSupervisorAndAgentOnlyListsOwn() throws Exception {
+        mvc.perform(get("/api/incidencias").with(actor(3,"EMPLEADO"))).andExpect(status().isOk());
+        verify(jdbc).queryForList(contains("WHERE id_usuario_registro = ?"), eq(3));
+        mvc.perform(post("/api/incidencias").with(actor(2,"SUPERVISOR")).with(csrf()).contentType("application/json").content("{}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(patch("/api/incidencias/INC-1/estado").with(actor(1,"ADMINISTRADOR")).with(csrf()).contentType("application/json").content("{\"estado\":\"Aprobada\"}"))
+                .andExpect(status().isForbidden());
+        when(jdbc.update(contains("UPDATE incidencias SET estado"), eq("Aprobada"), eq("INC-1"), eq(2))).thenReturn(1);
+        mvc.perform(patch("/api/incidencias/INC-1/estado").with(actor(2,"SUPERVISOR")).with(csrf()).contentType("application/json").content("{\"estado\":\"Aprobada\"}"))
+                .andExpect(status().isOk());
+        when(jdbc.update(contains("UPDATE incidencias SET estado"), eq("Aprobada"), eq("INC-1"), eq(2))).thenReturn(0);
+        mvc.perform(patch("/api/incidencias/INC-1/estado").with(actor(2,"SUPERVISOR")).with(csrf()).contentType("application/json").content("{\"estado\":\"Aprobada\"}"))
+                .andExpect(status().isConflict());
+        mvc.perform(patch("/api/incidencias/INC-1/estado").with(actor(2,"SUPERVISOR")).with(csrf()).contentType("application/json").content("{\"estado\":\"Inventado\"}"))
+                .andExpect(status().isBadRequest());
     }
     @Test void loginRespectsDisabledTwoFactorPreference() throws Exception {
         var plainLogin=account(6,"CLIENTE");plainLogin.put("dobleFactorActivo",false);

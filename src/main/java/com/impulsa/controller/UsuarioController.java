@@ -233,6 +233,16 @@ public class UsuarioController {
                     WHERE id_usuario = ?
                     """, nombres, apellidos, correo, idRol, departamento, cargo, telefono, id);
 
+            // Un cliente promovido a soporte también necesita su ficha para recibir asignaciones.
+            if (!rolNormalizado.equals("CLIENTE")) {
+                jdbcTemplate.update("""
+                        INSERT INTO empleados (id_usuario, codigo_empleado, dni, nombres, apellidos, telefono, area_departamento, cargo)
+                        SELECT id_usuario, codigo_usuario, COALESCE(NULLIF(dni_ruc, ''), '00000000'), nombres, COALESCE(apellidos, ''), telefono, departamento, cargo
+                        FROM usuarios WHERE id_usuario = ?
+                        ON CONFLICT (id_usuario) DO UPDATE SET nombres = EXCLUDED.nombres,
+                            apellidos = EXCLUDED.apellidos, area_departamento = EXCLUDED.area_departamento, cargo = EXCLUDED.cargo
+                        """, id);
+            }
             return ResponseEntity.ok(Map.of("success", true, "mensaje", "Usuario y rol actualizados correctamente."));
         } catch (Exception e) {
             if (e instanceof org.springframework.web.server.ResponseStatusException status) throw status;

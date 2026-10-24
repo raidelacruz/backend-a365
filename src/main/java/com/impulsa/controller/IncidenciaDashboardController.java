@@ -83,22 +83,27 @@ public class IncidenciaDashboardController {
                        detalle,
                        estado,
                        registrado_por AS "registradoPor",
+                       id_usuario_registro AS "idUsuarioRegistro",
                        TO_CHAR(creado_en, 'YYYY-MM-DD') AS fecha
                 FROM incidencias
-                ORDER BY id_incidencia DESC
                 """;
-        return ResponseEntity.ok(jdbcTemplate.queryForList(sql));
+        if (access.current().role().equals("EMPLEADO"))
+            return ResponseEntity.ok(jdbcTemplate.queryForList(sql + " WHERE id_usuario_registro = ? ORDER BY id_incidencia DESC", access.current().id()));
+        return ResponseEntity.ok(jdbcTemplate.queryForList(sql + " ORDER BY id_incidencia DESC"));
     }
 
     /**
      * 3. REGISTRAR NUEVA INCIDENCIA
      */
     @PostMapping("/incidencias")
+    @PreAuthorize("hasRole('EMPLEADO')")
     public ResponseEntity<?> crearIncidencia(@RequestBody Map<String, Object> body) {
         try {
             String tipo = Objects.toString(body.getOrDefault("tipo", "Actualización"), "").trim();
             String titulo = Objects.toString(body.get("titulo"), "").trim();
             String detalle = Objects.toString(body.get("detalle"), "").trim();
+            if (titulo.isBlank() || titulo.length() > 180 || detalle.isBlank() || detalle.length() > 10000)
+                throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "Completa título y detalle con longitudes válidas.");
             Integer idUsuario = access.current().id();
             String registradoPor = accounts.name(accounts.require(idUsuario));
 
@@ -120,14 +125,22 @@ public class IncidenciaDashboardController {
     }
 
     /**
-     * 4. APROBAR / RECHAZAR INCIDENCIA (Supervisor / Administrador)
+     * 4. Revisión exclusiva del supervisor, separada del registro por soporte.
      */
     @PatchMapping("/incidencias/{codigo}/estado")
-    @PreAuthorize("hasAnyRole('ADMINISTRADOR','SUPERVISOR')")
+    @PreAuthorize("hasRole('SUPERVISOR')")
+    @Transactional
     public ResponseEntity<?> cambiarEstadoIncidencia(@PathVariable String codigo, @RequestBody Map<String, Object> body) {
         try {
             String estado = Objects.toString(body.get("estado"), "Aprobada").trim();
-            jdbcTemplate.update("UPDATE incidencias SET estado = ?, actualizado_en = CURRENT_TIMESTAMP WHERE codigo_incidencia = ?", estado, codigo);
+            if (!Set.of("En revisión", "Aprobada", "Rechazada").contains(estado)) throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "Estado no válido.");
+            int changed = jdbcTemplate.update("""
+                    UPDATE incidencias SET estado = ?, actualizado_en = CURRENT_TIMESTAMP
+                    WHERE codigo_incidencia = ? AND estado IN ('Pendiente', 'En revisión')
+                        AND (id_usuario_registro IS NULL OR id_usuario_registro <> ?)
+                    """, estado, codigo, access.current().id());
+            if (changed == 0) throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT,
+                    "La incidencia ya fue revisada, no existe o fue registrada por ti.");
             return ResponseEntity.ok(Map.of("success", true, "estado", estado, "mensaje", "Incidencia " + codigo + " marcada como " + estado));
         } catch (Exception e) {
             if (e instanceof org.springframework.web.server.ResponseStatusException status) throw status;

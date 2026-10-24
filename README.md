@@ -32,11 +32,34 @@ La conexión local a PostgreSQL se guarda en `.database-local.properties`, exclu
 | Gestión de usuarios, roles, departamentos y SMTP | Administrador |
 | Perfil, contraseña, preferencias e historial de accesos | Propietario de la cuenta |
 | Consulta de ficha de usuario | Propietario o administrador |
-| Dashboard, reportes y aprobación de incidencias | Administrador y supervisor |
-| Atención y estados de tickets | Administrador, supervisor y empleado de soporte |
-| Tickets y mensajes del cliente | Solo los propios; se omiten las notas internas |
+| Dashboard y reportes | Administrador y supervisor |
+| Asignación, prioridad, cancelación y reapertura | Solo supervisor |
+| Iniciar atención y resolver | Agente EMPLEADO asignado; debe iniciar antes de resolver |
+| Confirmar solución y cerrar | Solicitante del ticket resuelto o supervisor |
+| Incidencias | EMPLEADO registra y consulta las propias; supervisor revisa; administrador consulta |
+| Tickets y mensajes del cliente | Solo los propios; se omiten notas internas e historial operativo |
+| Historial operativo de tickets | Administrador, supervisor y agente asignado |
 
-El servidor obtiene autor e ID desde la sesión; ignora identificadores y roles de autor enviados en el cuerpo. EMPLEADO conserva la función actual de agente de soporte hasta separar el rol técnico del solicitante.
+El servidor obtiene autor e ID desde la sesión; ignora identificadores y roles de autor enviados en el cuerpo. EMPLEADO representa al agente de soporte. Cada rol conserva Mis solicitudes para actuar como solicitante de sus propios casos; una persona no puede atender su propio ticket. El administrador tiene consulta de tickets y auditoría, sin sustituir las operaciones del supervisor ni del agente.
+
+Las asignaciones usan la columna existente tickets.id_empleado_asignado y la ficha empleados. No se requiere migración SQL. GET /api/tickets devuelve solo asignados para EMPLEADO, solo propios para CLIENTE y todos para supervisor/administrador; un filtro idUsuario de un empleado se fuerza a sus propias solicitudes. GET /api/tickets/agentes expone al supervisor únicamente agentes activos, con su carga pendiente. PATCH /api/tickets/{id}/asignacion valida agente, prioridad y motivo; al reasignar vuelve a ASIGNADO. El rol y la activación de los agentes se verifican en la base.
+
+Flujo: ABIERTO → supervisor asigna → ASIGNADO → agente inicia → EN_PROCESO → agente resuelve → RESUELTO → solicitante o supervisor confirma → CERRADO. Solo el supervisor cancela casos activos o reabre casos resueltos/cerrados (la reapertura elimina la asignación para repartirlo otra vez). Los cambios se bloquean por fila dentro de una transacción para evitar sobrescrituras simultáneas. Motivo obligatorio; cada cambio de estado/asignación queda en ticket_historial. Los mensajes aceptan esInterno=true solo del supervisor o agente asignado. Los casos cerrados/cancelados no aceptan mensajes.
+
+Las incidencias solo las crea EMPLEADO y solo las revisa SUPERVISOR. No se puede revisar una incidencia propia ni modificar una revisión finalizada. Si una cuenta que tenía rol de soporte cambia de rol o se desactiva, el caso queda visible al supervisor como pendiente de un responsable disponible: debe reasignarlo.
+
+### Guion de demostración
+
+1. Administrador: crear/activar un usuario SUPERVISOR y dos usuarios EMPLEADO. Las cuentas de ejemplo pueden estar inactivas; revisar Usuarios y roles. Usar correos reales accesibles si se mantiene 2FA.
+2. Cliente: registrar una solicitud desde Mis solicitudes.
+3. Supervisor: abrir Asignación de tickets, seleccionar el caso y elegir un agente activo, prioridad y motivo. Revisar la carga pendiente del agente.
+4. Agente asignado: entrar en Mis casos asignados, iniciar atención, responder y guardar una nota interna. El otro agente no debe ver el caso ni poder abrir su conversación por URL/API.
+5. Agente asignado: marcar como resuelto indicando el trabajo realizado.
+6. Cliente: comprobar que ve respuestas públicas sin notas internas. En Resueltos, confirmar solución y cerrar.
+7. Supervisor: consultar el historial; reabrir y reasignar si hace falta. Revisar una incidencia enviada por el agente.
+8. Administrador: consultar historial y usuarios; verificar que no aparecen las acciones de asignación ni resolución del equipo.
+
+Publicar primero el backend en Render y después el frontend en Vercel. Los cambios locales no afectan al despliegue hasta subirlos a sus respectivos repositorios. Las pruebas de esta funcionalidad simulan JDBC/correo y no crean datos ni envían mensajes reales.
 
 Para desarrollo, CORS admite http://localhost:5173 y http://127.0.0.1:5173. Puede ajustarse con app.security.allowed-origins usando una lista de orígenes exactos separados por comas. En producción usar HTTPS y configurar el proxy del frontend para /api.
 
