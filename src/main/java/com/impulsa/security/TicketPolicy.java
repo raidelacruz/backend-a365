@@ -11,9 +11,10 @@ public final class TicketPolicy {
 
     public static void transition(String role, boolean assigned, boolean owner, String previous, String next) {
         boolean allowed;
-        if (role.equals("EMPLEADO") && assigned) {
+        if (role.equals("TECNICO") && assigned) {
             allowed = (previous.equals("ASIGNADO") && next.equals("EN_PROCESO"))
-                    || (previous.equals("EN_PROCESO") && next.equals("RESUELTO"));
+                    || (previous.equals("EN_PROCESO") && Set.of("RESUELTO", "PENDIENTE_CLIENTE").contains(next))
+                    || (previous.equals("PENDIENTE_CLIENTE") && next.equals("EN_PROCESO"));
         } else if (role.equals("SUPERVISOR")) {
             allowed = (!TERMINAL.contains(previous) && next.equals("CANCELADO"))
                     || (previous.equals("RESUELTO") && next.equals("CERRADO"))

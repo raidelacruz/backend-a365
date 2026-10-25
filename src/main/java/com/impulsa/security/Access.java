@@ -13,7 +13,7 @@ public class Access {
     public boolean isSelf(Integer id, Authentication auth) { return auth != null && auth.getPrincipal() instanceof SessionUser user && id != null && user.id() == id; }
     public boolean isSelfOrAdmin(Integer id, Authentication auth) { return isSelf(id, auth) || role(auth, "ADMINISTRADOR"); }
     public boolean role(Authentication auth, String role) { return auth != null && auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_" + role)); }
-    public boolean staff(Authentication auth) { return role(auth, "ADMINISTRADOR") || role(auth, "SUPERVISOR") || role(auth, "EMPLEADO"); }
+    public boolean staff(Authentication auth) { return role(auth, "ADMINISTRADOR") || role(auth, "SUPERVISOR") || role(auth, "TECNICO"); }
     public boolean canReadTicket(Long id, Authentication auth) {
         if (role(auth, "ADMINISTRADOR") || role(auth, "SUPERVISOR")) return true;
         if (canAttendTicket(id, auth)) return true;
@@ -23,7 +23,7 @@ public class Access {
     }
 
     public boolean canAttendTicket(Long id, Authentication auth) {
-        if (!role(auth, "EMPLEADO") || !(auth.getPrincipal() instanceof SessionUser user)) return false;
+        if (!role(auth, "TECNICO") || !(auth.getPrincipal() instanceof SessionUser user)) return false;
         Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM tickets t JOIN empleados e ON e.id_empleado = t.id_empleado_asignado WHERE t.id_ticket = ? AND e.id_usuario = ? AND t.id_usuario_creador <> ?",
                 Integer.class, id, user.id(), user.id());
         return count != null && count > 0;

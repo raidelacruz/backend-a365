@@ -4,6 +4,9 @@ import com.impulsa.config.*;
 import com.impulsa.controller.*;
 import com.impulsa.security.*;
 import com.impulsa.service.EmailNotificationService;
+import com.impulsa.service.ClienteService;
+import com.impulsa.service.AdjuntoService;
+import com.impulsa.service.ReporteService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,7 +28,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.*;
 import static org.junit.jupiter.api.Assertions.*;
 
-@WebMvcTest(controllers = {AuthController.class, UsuarioController.class, TicketController.class, IncidenciaDashboardController.class})
+@WebMvcTest(controllers = {AuthController.class, UsuarioController.class, TicketController.class, IncidenciaDashboardController.class, ClienteController.class, AdjuntoController.class, ReporteController.class})
 @Import({SecurityConfig.class, CorsConfig.class, ApiErrors.class, Access.class, AccountService.class, PasswordService.class, AttemptLimiter.class})
 class SecurityIntegrationTest {
     @Autowired MockMvc mvc;
@@ -33,6 +36,9 @@ class SecurityIntegrationTest {
     @Autowired PasswordService passwords;
     @MockBean JdbcTemplate jdbc;
     @MockBean EmailNotificationService email;
+    @MockBean ClienteService clients;
+    @MockBean AdjuntoService attachments;
+    @MockBean ReporteService reports;
     @MockBean TransactionTemplate transactions;
     @SpyBean AccountService accounts;
     private static String hash;
@@ -44,7 +50,8 @@ class SecurityIntegrationTest {
         if(hash==null) hash=passwords.encode("Password123!");
         doReturn(Optional.of(account(1,"ADMINISTRADOR"))).when(accounts).byId(1);
         doReturn(Optional.of(account(2,"SUPERVISOR"))).when(accounts).byId(2);
-        doReturn(Optional.of(account(3,"EMPLEADO"))).when(accounts).byId(3);
+        doReturn(Optional.of(account(3,"TECNICO"))).when(accounts).byId(3);
+        doReturn(Optional.of(account(4,"EMPLEADO"))).when(accounts).byId(4);
         doReturn(Optional.of(account(6,"CLIENTE"))).when(accounts).byId(6);
         when(email.enviarCodigo2FA(anyString(),anyString(),anyString())).thenReturn(true);
         when(jdbc.queryForList("SELECT * FROM tickets WHERE id_ticket = ? FOR UPDATE", 10L))
@@ -65,7 +72,7 @@ class SecurityIntegrationTest {
     }
     @Test void onlyAdminCanManageUsersAndSmtp() throws Exception {
         mvc.perform(get("/api/usuarios").with(actor(1,"ADMINISTRADOR"))).andExpect(status().isOk());
-        mvc.perform(get("/api/config/smtp").with(actor(3,"EMPLEADO"))).andExpect(status().isForbidden());
+        mvc.perform(get("/api/config/smtp").with(actor(3,"TECNICO"))).andExpect(status().isForbidden());
         mvc.perform(get("/api/usuarios").with(actor(2,"SUPERVISOR"))).andExpect(status().isForbidden());
         mvc.perform(post("/api/usuarios").with(actor(6,"CLIENTE")).with(csrf()).contentType("application/json").content("{}"))
             .andExpect(status().isForbidden());
@@ -190,31 +197,31 @@ class SecurityIntegrationTest {
         when(jdbc.queryForObject(contains("JOIN empleados e"), eq(Integer.class), eq(10L), eq(3), eq(3))).thenReturn(1);
     }
     @Test void employeeInboxIsScopedEvenWhenSpoofingOwnerFilter() throws Exception {
-        mvc.perform(get("/api/tickets").with(actor(3,"EMPLEADO"))).andExpect(status().isOk());
+        mvc.perform(get("/api/tickets").with(actor(3,"TECNICO"))).andExpect(status().isOk());
         verify(jdbc).queryForList(contains("WHERE agente.id_usuario = ?"), eq(3), eq(3));
-        mvc.perform(get("/api/tickets?idUsuario=1").with(actor(3,"EMPLEADO"))).andExpect(status().isOk());
+        mvc.perform(get("/api/tickets?idUsuario=1").with(actor(3,"TECNICO"))).andExpect(status().isOk());
         verify(jdbc).queryForList(contains("WHERE t.id_usuario_creador = ?"), eq(3));
     }
     @Test void unassignedEmployeeCannotReadConversationOrHistoryOrModifyTicket() throws Exception {
-        mvc.perform(get("/api/tickets/10/mensajes").with(actor(3,"EMPLEADO"))).andExpect(status().isForbidden());
-        mvc.perform(get("/api/tickets/10/historial").with(actor(3,"EMPLEADO"))).andExpect(status().isForbidden());
-        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"EMPLEADO")).with(csrf()).contentType("application/json")
+        mvc.perform(get("/api/tickets/10/mensajes").with(actor(3,"TECNICO"))).andExpect(status().isForbidden());
+        mvc.perform(get("/api/tickets/10/historial").with(actor(3,"TECNICO"))).andExpect(status().isForbidden());
+        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"TECNICO")).with(csrf()).contentType("application/json")
                 .content("{\"estado\":\"EN_PROCESO\",\"motivo\":\"Intento ajeno\"}")).andExpect(status().isForbidden());
         verify(jdbc,never()).update(contains("UPDATE tickets"), any(Object[].class));
     }
     @Test void assignedAgentMustStartBeforeResolvingAndCannotAssignOrClose() throws Exception {
         assignedToEmployee();
         when(jdbc.queryForList("SELECT * FROM tickets WHERE id_ticket = ? FOR UPDATE", 10L)).thenReturn(List.of(ticket("ASIGNADO")));
-        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"EMPLEADO")).with(csrf()).contentType("application/json")
+        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"TECNICO")).with(csrf()).contentType("application/json")
                 .content("{\"estado\":\"RESUELTO\",\"motivo\":\"Sin iniciar\"}")).andExpect(status().isConflict());
-        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"EMPLEADO")).with(csrf()).contentType("application/json")
+        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"TECNICO")).with(csrf()).contentType("application/json")
                 .content("{\"estado\":\"EN_PROCESO\",\"motivo\":\"Diagnóstico iniciado\"}")).andExpect(status().isOk());
         when(jdbc.queryForList("SELECT * FROM tickets WHERE id_ticket = ? FOR UPDATE", 10L)).thenReturn(List.of(ticket("EN_PROCESO")));
-        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"EMPLEADO")).with(csrf()).contentType("application/json")
+        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"TECNICO")).with(csrf()).contentType("application/json")
                 .content("{\"estado\":\"RESUELTO\",\"motivo\":\"Acceso restaurado\"}")).andExpect(status().isOk());
-        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"EMPLEADO")).with(csrf()).contentType("application/json")
+        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"TECNICO")).with(csrf()).contentType("application/json")
                 .content("{\"estado\":\"CERRADO\",\"motivo\":\"Cerrar\"}")).andExpect(status().isConflict());
-        mvc.perform(patch("/api/tickets/10/asignacion").with(actor(3,"EMPLEADO")).with(csrf()).contentType("application/json").content("{}"))
+        mvc.perform(patch("/api/tickets/10/asignacion").with(actor(3,"TECNICO")).with(csrf()).contentType("application/json").content("{}"))
                 .andExpect(status().isForbidden());
         verify(jdbc).update(contains("INSERT INTO ticket_historial"), eq(10L), eq(3), eq("CAMBIO_ESTADO"), eq("EN_PROCESO"), eq("RESUELTO"), eq("Acceso restaurado"));
     }
@@ -268,15 +275,15 @@ class SecurityIntegrationTest {
     }
     @Test void agentCanPublishInternalNoteAndClosedConversationsRejectWrites() throws Exception {
         assignedToEmployee();
-        mvc.perform(post("/api/tickets/10/mensajes").with(actor(3,"EMPLEADO")).with(csrf()).contentType("application/json")
+        mvc.perform(post("/api/tickets/10/mensajes").with(actor(3,"TECNICO")).with(csrf()).contentType("application/json")
                 .content("{\"contenido\":\"Diagnóstico privado\",\"esInterno\":true}")).andExpect(status().isCreated());
-        verify(jdbc).update(contains("INSERT INTO ticket_mensajes"), eq(10L), eq(3), eq("Usuario Prueba"), eq("EMPLEADO"), eq(true), eq("Diagnóstico privado"));
+        verify(jdbc).update(contains("INSERT INTO ticket_mensajes"), eq(10L), eq(3), eq("Usuario Prueba"), eq("TECNICO"), eq(true), eq("Diagnóstico privado"));
         when(jdbc.queryForList("SELECT * FROM tickets WHERE id_ticket = ? FOR UPDATE", 10L)).thenReturn(List.of(ticket("CERRADO")));
-        mvc.perform(post("/api/tickets/10/mensajes").with(actor(3,"EMPLEADO")).with(csrf()).contentType("application/json")
+        mvc.perform(post("/api/tickets/10/mensajes").with(actor(3,"TECNICO")).with(csrf()).contentType("application/json")
                 .content("{\"contenido\":\"Fuera de plazo\"}")).andExpect(status().isConflict());
     }
     @Test void incidentReviewIsExclusiveToSupervisorAndAgentOnlyListsOwn() throws Exception {
-        mvc.perform(get("/api/incidencias").with(actor(3,"EMPLEADO"))).andExpect(status().isOk());
+        mvc.perform(get("/api/incidencias").with(actor(3,"TECNICO"))).andExpect(status().isOk());
         verify(jdbc).queryForList(contains("WHERE id_usuario_registro = ?"), eq(3));
         mvc.perform(post("/api/incidencias").with(actor(2,"SUPERVISOR")).with(csrf()).contentType("application/json").content("{}"))
                 .andExpect(status().isForbidden());
@@ -290,6 +297,52 @@ class SecurityIntegrationTest {
                 .andExpect(status().isConflict());
         mvc.perform(patch("/api/incidencias/INC-1/estado").with(actor(2,"SUPERVISOR")).with(csrf()).contentType("application/json").content("{\"estado\":\"Inventado\"}"))
                 .andExpect(status().isBadRequest());
+    }
+    @Test void internalEmployeeIsRequesterNotSupport() throws Exception {
+        mvc.perform(get("/api/tickets?idUsuario=1").with(actor(4,"EMPLEADO"))).andExpect(status().isOk());
+        verify(jdbc).queryForList(contains("WHERE t.id_usuario_creador = ?"),eq(4));
+        for(String path:List.of("/api/incidencias","/api/tickets/agentes","/api/usuarios","/api/clientes","/api/reportes/exportar?formato=xlsx"))
+            mvc.perform(get(path).with(actor(4,"EMPLEADO"))).andExpect(status().isForbidden());
+        mvc.perform(patch("/api/tickets/10/asignacion").with(actor(4,"EMPLEADO")).with(csrf()).contentType("application/json").content("{}"))
+            .andExpect(status().isForbidden());
+    }
+    @Test void technicianCanRequestInformationAndResumeButCannotSkipToResolution() throws Exception {
+        assignedToEmployee();
+        when(jdbc.queryForList("SELECT * FROM tickets WHERE id_ticket = ? FOR UPDATE",10L)).thenReturn(List.of(ticket("EN_PROCESO")));
+        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"TECNICO")).with(csrf()).contentType("application/json")
+            .content("{\"estado\":\"PENDIENTE_CLIENTE\",\"motivo\":\"Enviar captura del error\"}")).andExpect(status().isOk());
+        when(jdbc.queryForList("SELECT * FROM tickets WHERE id_ticket = ? FOR UPDATE",10L)).thenReturn(List.of(ticket("PENDIENTE_CLIENTE")));
+        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"TECNICO")).with(csrf()).contentType("application/json")
+            .content("{\"estado\":\"RESUELTO\",\"motivo\":\"Sin revisar respuesta\"}")).andExpect(status().isConflict());
+        mvc.perform(patch("/api/tickets/10/estado").with(actor(3,"TECNICO")).with(csrf()).contentType("application/json")
+            .content("{\"estado\":\"EN_PROCESO\",\"motivo\":\"Captura recibida\"}")).andExpect(status().isOk());
+    }
+    @Test void onlyAdministratorWritesCorporateDirectory() throws Exception {
+        mvc.perform(get("/api/clientes?q=Empresa").with(actor(2,"SUPERVISOR"))).andExpect(status().isOk());
+        mvc.perform(post("/api/clientes").with(actor(2,"SUPERVISOR")).with(csrf()).contentType("application/json").content("{}"))
+            .andExpect(status().isForbidden());
+        when(clients.create(anyMap())).thenReturn(1L);
+        mvc.perform(post("/api/clientes").with(actor(1,"ADMINISTRADOR")).with(csrf()).contentType("application/json").content("{}"))
+            .andExpect(status().isCreated());
+        mvc.perform(put("/api/clientes/1").with(actor(1,"ADMINISTRADOR")).with(csrf()).contentType("application/json").content("{}"))
+            .andExpect(status().isOk());
+    }
+    @Test void attachmentRoutesEnforceTicketOwnershipAndCsrf() throws Exception {
+        mvc.perform(get("/api/tickets/10/adjuntos").with(actor(6,"CLIENTE"))).andExpect(status().isForbidden());
+        mvc.perform(get("/api/tickets/10/adjuntos/2").with(actor(3,"TECNICO"))).andExpect(status().isForbidden());
+        when(jdbc.queryForObject(contains("SELECT COUNT(*) FROM tickets"),eq(Integer.class),eq(10L),eq(6))).thenReturn(1);
+        mvc.perform(get("/api/tickets/10/adjuntos").with(actor(6,"CLIENTE"))).andExpect(status().isOk());
+        var file=new org.springframework.mock.web.MockMultipartFile("archivo","evidencia.pdf","application/pdf","%PDF-1.7".getBytes());
+        mvc.perform(multipart("/api/tickets/10/adjuntos").file(file).with(actor(6,"CLIENTE"))).andExpect(status().isForbidden());
+        mvc.perform(multipart("/api/tickets/10/adjuntos").file(file).with(actor(6,"CLIENTE")).with(csrf())).andExpect(status().isCreated());
+    }
+    @Test void reportDownloadHasAttachmentHeaderAndIsRestrictedToManagers() throws Exception {
+        when(reports.export("xlsx",null,null)).thenReturn(new byte[]{80,75});
+        mvc.perform(get("/api/reportes/exportar?formato=xlsx").with(actor(2,"SUPERVISOR"))).andExpect(status().isOk())
+            .andExpect(header().string("Content-Disposition","attachment; filename=\"tickets-a365.xlsx\""))
+            .andExpect(header().string("Cache-Control","private, no-store"));
+        mvc.perform(get("/api/reportes/exportar?formato=pdf").with(actor(6,"CLIENTE"))).andExpect(status().isForbidden());
+        mvc.perform(get("/api/reportes/exportar?formato=xlsx").with(actor(3,"TECNICO"))).andExpect(status().isForbidden());
     }
     @Test void loginRespectsDisabledTwoFactorPreference() throws Exception {
         var plainLogin=account(6,"CLIENTE");plainLogin.put("dobleFactorActivo",false);

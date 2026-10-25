@@ -13,7 +13,7 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api")
-@PreAuthorize("hasAnyRole('ADMINISTRADOR','SUPERVISOR','EMPLEADO')")
+@PreAuthorize("hasAnyRole('ADMINISTRADOR','SUPERVISOR','TECNICO')")
 public class IncidenciaDashboardController {
 
     @Autowired
@@ -31,7 +31,7 @@ public class IncidenciaDashboardController {
     @PreAuthorize("hasAnyRole('ADMINISTRADOR','SUPERVISOR')")
     public ResponseEntity<?> obtenerResumenDashboard() {
         Integer pendientes = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM tickets WHERE estado IN ('ABIERTO', 'EN_PROCESO', 'ASIGNADO')", Integer.class);
+                "SELECT COUNT(*) FROM tickets WHERE estado IN ('ABIERTO', 'EN_PROCESO', 'ASIGNADO', 'PENDIENTE_CLIENTE')", Integer.class);
         Integer atendidos = jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM tickets WHERE estado IN ('RESUELTO', 'CERRADO')", Integer.class);
         Integer cancelados = jdbcTemplate.queryForObject(
@@ -87,7 +87,7 @@ public class IncidenciaDashboardController {
                        TO_CHAR(creado_en, 'YYYY-MM-DD') AS fecha
                 FROM incidencias
                 """;
-        if (access.current().role().equals("EMPLEADO"))
+        if (access.current().role().equals("TECNICO"))
             return ResponseEntity.ok(jdbcTemplate.queryForList(sql + " WHERE id_usuario_registro = ? ORDER BY id_incidencia DESC", access.current().id()));
         return ResponseEntity.ok(jdbcTemplate.queryForList(sql + " ORDER BY id_incidencia DESC"));
     }
@@ -96,7 +96,7 @@ public class IncidenciaDashboardController {
      * 3. REGISTRAR NUEVA INCIDENCIA
      */
     @PostMapping("/incidencias")
-    @PreAuthorize("hasRole('EMPLEADO')")
+    @PreAuthorize("hasRole('TECNICO')")
     public ResponseEntity<?> crearIncidencia(@RequestBody Map<String, Object> body) {
         try {
             String tipo = Objects.toString(body.getOrDefault("tipo", "Actualización"), "").trim();

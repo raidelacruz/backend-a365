@@ -127,8 +127,8 @@ public class UsuarioController {
             String apellidos = Objects.toString(body.getOrDefault("apellidos", ""), "").trim();
             String correo = Objects.toString(body.get("correo"), "").trim().toLowerCase();
             String password = passwords.encode(Objects.toString(body.get("password"), ""));
-            String rolInput = Objects.toString(body.getOrDefault("rol", "EMPLEADO"), "EMPLEADO").trim().toUpperCase();
-            String departamento = Objects.toString(body.getOrDefault("departamento", "Soporte"), "Soporte").trim();
+            String rolInput = Objects.toString(body.getOrDefault("rol", "EMPLEADO"), "TECNICO").trim().toUpperCase();
+            String departamento = Objects.toString(body.getOrDefault("departamento", "General"), "Soporte").trim();
             String dni = Objects.toString(body.getOrDefault("dni", ""), "").trim();
             String telefono = Objects.toString(body.getOrDefault("telefono", ""), "").trim();
 
@@ -141,14 +141,18 @@ public class UsuarioController {
                 return ResponseEntity.badRequest().body(Map.of("success", false, "error", "Ya existe un usuario con ese correo electrónico."));
             }
 
+            if (!Set.of("ADMINISTRADOR","SUPERVISOR","TECNICO","EMPLEADO","CLIENTE").contains(rolInput)) throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,"Rol no válido.");
             String rolNormalizado = "EMPLEADO";
-            String cargoDefault = "Agente Soporte";
+            String cargoDefault = "Colaborador interno";
             if (rolInput.contains("ADMIN")) {
                 rolNormalizado = "ADMINISTRADOR";
                 cargoDefault = "Administrador";
             } else if (rolInput.contains("SUPER")) {
                 rolNormalizado = "SUPERVISOR";
                 cargoDefault = "Supervisor";
+            } else if (rolInput.contains("TEC") || rolInput.contains("ASESOR")) {
+                rolNormalizado = "TECNICO";
+                cargoDefault = "Agente Soporte";
             } else if (rolInput.contains("CLI")) {
                 rolNormalizado = "CLIENTE";
                 cargoDefault = "Cliente";
@@ -156,7 +160,7 @@ public class UsuarioController {
 
             Integer idRol = jdbcTemplate.queryForObject(
                     "SELECT id_rol FROM roles WHERE nombre = ? LIMIT 1", Integer.class, rolNormalizado);
-            if (idRol == null) idRol = 3;
+            if (idRol == null) throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,"El catálogo de roles no está actualizado. Reinicia el backend.");
 
             Integer maxId = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(id_usuario), 100) FROM usuarios", Integer.class);
             String prefijo = rolNormalizado.equals("CLIENTE") ? "CLI-" : "USR-";
@@ -206,17 +210,21 @@ public class UsuarioController {
             String apellidos = Objects.toString(body.getOrDefault("apellidos", ""), "").trim();
             String correo = Objects.toString(body.getOrDefault("correo", ""), "").trim().toLowerCase();
             String rolInput = Objects.toString(body.getOrDefault("rol", "EMPLEADO"), "").trim().toUpperCase();
-            String departamento = Objects.toString(body.getOrDefault("departamento", "Soporte"), "").trim();
+            String departamento = Objects.toString(body.getOrDefault("departamento", "General"), "").trim();
             String telefono = Objects.toString(body.getOrDefault("telefono", ""), "").trim();
 
+            if (!Set.of("ADMINISTRADOR","SUPERVISOR","TECNICO","EMPLEADO","CLIENTE").contains(rolInput)) throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,"Rol no válido.");
             String rolNormalizado = "EMPLEADO";
-            String cargo = "Agente Soporte";
+            String cargo = "Colaborador interno";
             if (rolInput.contains("ADMIN")) {
                 rolNormalizado = "ADMINISTRADOR";
                 cargo = "Administradora";
             } else if (rolInput.contains("SUPER")) {
                 rolNormalizado = "SUPERVISOR";
                 cargo = "Supervisor";
+            } else if (rolInput.contains("TEC") || rolInput.contains("ASESOR")) {
+                rolNormalizado = "TECNICO";
+                cargo = "Agente Soporte";
             } else if (rolInput.contains("CLI")) {
                 rolNormalizado = "CLIENTE";
                 cargo = "Cliente";
@@ -224,7 +232,7 @@ public class UsuarioController {
 
             Integer idRol = jdbcTemplate.queryForObject(
                     "SELECT id_rol FROM roles WHERE nombre = ? LIMIT 1", Integer.class, rolNormalizado);
-            if (idRol == null) idRol = 3;
+            if (idRol == null) throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,"El catálogo de roles no está actualizado. Reinicia el backend.");
 
             jdbcTemplate.update("""
                     UPDATE usuarios

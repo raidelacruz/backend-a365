@@ -9,6 +9,8 @@ import java.util.Map;
 
 @RestControllerAdvice
 public class ApiErrors {
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+    public ResponseEntity<?> largeFile(Exception ex) { return ResponseEntity.status(413).body(Map.of("success",false,"error","El adjunto supera el límite de 2 MB.")); }
     @ExceptionHandler(ResponseStatusException.class) public ResponseEntity<?> status(ResponseStatusException ex) {
         return ResponseEntity.status(ex.getStatusCode()).body(Map.of("success", false, "error", ex.getReason() == null ? "Solicitud no válida." : ex.getReason()));
     }

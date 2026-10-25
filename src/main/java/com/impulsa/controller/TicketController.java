@@ -24,7 +24,7 @@ public class TicketController {
      */
     @GetMapping
     public ResponseEntity<?> listarTickets(@RequestParam(required = false) Integer idUsuario) {
-        if (access.current().role().equals("CLIENTE")) idUsuario = access.current().id();
+        if (Set.of("CLIENTE", "EMPLEADO").contains(access.current().role())) idUsuario = access.current().id();
         String sqlBase = """
                 SELECT t.id_ticket AS "idTicket",
                        t.codigo_ticket AS codigo,
@@ -37,7 +37,7 @@ public class TicketController {
                        t.id_usuario_creador AS "idUsuarioCreador",
                        t.id_empleado_asignado AS "idEmpleadoAsignado",
                        agente.id_usuario AS "idUsuarioAsignado",
-                       CASE WHEN r.nombre = 'EMPLEADO' AND agente.activo THEN agente.nombres || ' ' || COALESCE(agente.apellidos, '') ELSE NULL END AS responsable,
+                       CASE WHEN r.nombre = 'TECNICO' AND agente.activo THEN agente.nombres || ' ' || COALESCE(agente.apellidos, '') ELSE NULL END AS responsable,
                        TO_CHAR(t.creado_en, 'YYYY-MM-DD HH24:MI') AS fecha
                 FROM tickets t
                 LEFT JOIN categorias_ticket c ON t.id_categoria = c.id_categoria
@@ -47,11 +47,11 @@ public class TicketController {
                 LEFT JOIN roles r ON r.id_rol = agente.id_rol
                 """;
 
-        if (access.current().role().equals("EMPLEADO") && idUsuario == null) {
+        if (access.current().role().equals("TECNICO") && idUsuario == null) {
             return ResponseEntity.ok(jdbcTemplate.queryForList(sqlBase + " WHERE agente.id_usuario = ? AND t.id_usuario_creador <> ? ORDER BY t.id_ticket DESC", access.current().id(), access.current().id()));
         }
         if (idUsuario != null) {
-            if (access.current().role().equals("EMPLEADO")) idUsuario = access.current().id();
+            if (access.current().role().equals("TECNICO")) idUsuario = access.current().id();
             String sqlCliente = sqlBase + " WHERE t.id_usuario_creador = ? ORDER BY t.id_ticket DESC";
             return ResponseEntity.ok(jdbcTemplate.queryForList(sqlCliente, idUsuario));
         } else {
@@ -69,8 +69,8 @@ public class TicketController {
                        u.departamento, COUNT(t.id_ticket)::INT AS pendientes
                 FROM empleados e JOIN usuarios u ON u.id_usuario = e.id_usuario
                 JOIN roles r ON r.id_rol = u.id_rol
-                LEFT JOIN tickets t ON t.id_empleado_asignado = e.id_empleado AND t.estado IN ('ASIGNADO','EN_PROCESO')
-                WHERE r.nombre = 'EMPLEADO' AND u.activo = TRUE
+                LEFT JOIN tickets t ON t.id_empleado_asignado = e.id_empleado AND t.estado IN ('ASIGNADO','EN_PROCESO','PENDIENTE_CLIENTE')
+                WHERE r.nombre = 'TECNICO' AND u.activo = TRUE
                 GROUP BY e.id_empleado, u.id_usuario ORDER BY nombre
                 """));
     }
@@ -91,9 +91,9 @@ public class TicketController {
         var candidates = jdbcTemplate.queryForList("""
                 SELECT e.id_usuario FROM empleados e JOIN usuarios u ON u.id_usuario = e.id_usuario
                 JOIN roles r ON r.id_rol = u.id_rol
-                WHERE e.id_empleado = ? AND u.activo = TRUE AND r.nombre = 'EMPLEADO' FOR SHARE OF u, e
+                WHERE e.id_empleado = ? AND u.activo = TRUE AND r.nombre = 'TECNICO' FOR SHARE OF u, e
                 """, employeeId);
-        if (candidates.isEmpty()) throw status(400, "El agente debe estar activo y tener rol EMPLEADO.");
+        if (candidates.isEmpty()) throw status(400, "El agente debe estar activo y tener rol TECNICO.");
         if (((Number)candidates.get(0).get("id_usuario")).intValue() == ((Number)ticket.get("id_usuario_creador")).intValue())
             throw status(400, "El solicitante no puede atender su propio caso.");
         Object oldEmployee = ticket.get("id_empleado_asignado");
@@ -142,6 +142,8 @@ public class TicketController {
             String descripcion = Objects.toString(body.get("descripcion"), "").trim();
             String categoriaInput = Objects.toString(body.getOrDefault("categoria", "Software"), "Software").trim();
             String prioridad = Objects.toString(body.getOrDefault("prioridad", "Media"), "Media").trim();
+            if (!Set.of("Baja","Media","Alta").contains(prioridad) || asunto.length() > 150 || descripcion.length() > 10000)
+                throw status(400,"Revisa el asunto, la descripción y la prioridad.");
             Integer idUsuarioCreador = access.current().id();
             String solicitanteNombre = accounts.name(accounts.require(idUsuarioCreador));
 
@@ -212,9 +214,9 @@ public class TicketController {
     public ResponseEntity<?> cambiarEstadoTicket(@PathVariable Long idTicket, @RequestBody Map<String, Object> body) {
         try {
             String nuevoEstado = Objects.toString(body.get("estado"), "EN_PROCESO").trim().toUpperCase();
-            if (!Set.of("ABIERTO", "ASIGNADO", "EN_PROCESO", "RESUELTO", "CERRADO", "CANCELADO").contains(nuevoEstado)) throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "Estado no válido.");
+            if (!Set.of("ABIERTO", "ASIGNADO", "EN_PROCESO", "PENDIENTE_CLIENTE", "RESUELTO", "CERRADO", "CANCELADO").contains(nuevoEstado)) throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "Estado no válido.");
             String role = access.current().role();
-            if (!Set.of("SUPERVISOR", "EMPLEADO").contains(role) && !nuevoEstado.equals("CERRADO")) throw status(403, "Tu rol no puede ejecutar esta acción.");
+            if (!Set.of("SUPERVISOR", "TECNICO").contains(role) && !nuevoEstado.equals("CERRADO")) throw status(403, "Tu rol no puede ejecutar esta acción.");
             var ticket = lockedTicket(idTicket);
             boolean assigned = access.canAttendTicket(idTicket, access.authentication());
             boolean owner = ((Number)ticket.get("id_usuario_creador")).intValue() == access.current().id();
