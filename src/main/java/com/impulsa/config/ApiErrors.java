@@ -1,5 +1,7 @@
 package com.impulsa.config;
 
+import jakarta.validation.ConstraintViolationException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.server.ResponseStatusException;
@@ -9,6 +11,20 @@ import java.util.Map;
 
 @RestControllerAdvice
 public class ApiErrors {
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<?> beanValidation(MethodArgumentNotValidException ex) {
+        String message = ex.getBindingResult().getFieldErrors().stream()
+                .map(err -> err.getDefaultMessage() == null ? "Revisa los datos ingresados." : err.getDefaultMessage())
+                .findFirst().orElse("Revisa los datos ingresados.");
+        return ResponseEntity.badRequest().body(Map.of("success", false, "error", message));
+    }
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<?> constraintValidation(ConstraintViolationException ex) {
+        String message = ex.getConstraintViolations().stream()
+                .map(v -> v.getMessage() == null ? "Revisa los datos ingresados." : v.getMessage())
+                .findFirst().orElse("Revisa los datos ingresados.");
+        return ResponseEntity.badRequest().body(Map.of("success", false, "error", message));
+    }
     @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
     public ResponseEntity<?> largeFile(Exception ex) { return ResponseEntity.status(413).body(Map.of("success",false,"error","El adjunto supera el límite de 2 MB.")); }
     @ExceptionHandler(ResponseStatusException.class) public ResponseEntity<?> status(ResponseStatusException ex) {

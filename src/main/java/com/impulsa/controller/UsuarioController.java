@@ -1,5 +1,7 @@
 package com.impulsa.controller;
 
+import com.impulsa.config.RequestValidator;
+import com.impulsa.dto.UsuarioRequests;
 import com.impulsa.security.*;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -12,7 +14,6 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.*;
-import java.util.regex.Pattern;
 import java.text.Normalizer;
 
 @RestController
@@ -20,13 +21,12 @@ import java.text.Normalizer;
 @PreAuthorize("hasRole('ADMINISTRADOR')")
 public class UsuarioController {
 
-    private static final Pattern EMAIL_PATTERN = Pattern.compile("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$");
-
     @Autowired
     private JdbcTemplate jdbcTemplate;
     @Autowired private PasswordService passwords;
     @Autowired private AttemptLimiter limiter;
     @Autowired private Access access;
+    @Autowired private RequestValidator validator;
 
     /** Catálogo inicial más las áreas existentes, sin modificar registros históricos. */
     @GetMapping("/departamentos")
@@ -129,20 +129,17 @@ public class UsuarioController {
      */
     @PostMapping
     @Transactional
-    public ResponseEntity<?> crearUsuario(@RequestBody Map<String, Object> body) {
+    public ResponseEntity<?> crearUsuario(@RequestBody UsuarioRequests.CreateUserRequest body) {
+        validator.validate(body);
         try {
-            String nombres = Objects.toString(body.get("nombres"), "").trim();
-            String apellidos = Objects.toString(body.getOrDefault("apellidos", ""), "").trim();
-            String correo = Objects.toString(body.get("correo"), "").trim().toLowerCase();
-            String password = passwords.encode(Objects.toString(body.get("password"), ""));
-            String rolInput = Objects.toString(body.getOrDefault("rol", "EMPLEADO"), "TECNICO").trim().toUpperCase();
-            String departamento = Objects.toString(body.getOrDefault("departamento", "General"), "Soporte").trim();
-            String dni = Objects.toString(body.getOrDefault("dni", ""), "").trim();
-            String telefono = Objects.toString(body.getOrDefault("telefono", ""), "").trim();
-
-            if (nombres.isEmpty() || correo.isEmpty()) {
-                return ResponseEntity.badRequest().body(Map.of("success", false, "error", "Nombres y correo son obligatorios."));
-            }
+            String nombres = body.nombres();
+            String apellidos = body.apellidos();
+            String correo = body.correo();
+            String password = passwords.encode(body.password());
+            String rolInput = body.rol();
+            String departamento = body.departamento();
+            String dni = body.dni();
+            String telefono = body.telefono();
 
             Integer existe = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM usuarios WHERE LOWER(correo) = ?", Integer.class, correo);
             if (existe != null && existe > 0) {
@@ -212,14 +209,15 @@ public class UsuarioController {
      */
     @PutMapping("/{id}")
     @Transactional
-    public ResponseEntity<?> actualizarUsuario(@PathVariable Integer id, @RequestBody Map<String, Object> body) {
+    public ResponseEntity<?> actualizarUsuario(@PathVariable Integer id, @RequestBody UsuarioRequests.UpdateUserRequest body) {
+        validator.validate(body);
         try {
-            String nombres = Objects.toString(body.getOrDefault("nombres", ""), "").trim();
-            String apellidos = Objects.toString(body.getOrDefault("apellidos", ""), "").trim();
-            String correo = Objects.toString(body.getOrDefault("correo", ""), "").trim().toLowerCase();
-            String rolInput = Objects.toString(body.getOrDefault("rol", "EMPLEADO"), "").trim().toUpperCase();
-            String departamento = Objects.toString(body.getOrDefault("departamento", "General"), "").trim();
-            String telefono = Objects.toString(body.getOrDefault("telefono", ""), "").trim();
+            String nombres = body.nombres();
+            String apellidos = body.apellidos();
+            String correo = body.correo();
+            String rolInput = body.rol();
+            String departamento = body.departamento();
+            String telefono = body.telefono();
 
             if (!Set.of("ADMINISTRADOR","SUPERVISOR","TECNICO","EMPLEADO","CLIENTE").contains(rolInput)) throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,"Rol no válido.");
             String rolNormalizado = "EMPLEADO";
@@ -272,16 +270,13 @@ public class UsuarioController {
     @PutMapping("/{id}/perfil")
     @PreAuthorize("@access.isSelf(#id, authentication)")
     @Transactional
-    public ResponseEntity<?> actualizarPerfilPropio(@PathVariable Integer id, @RequestBody Map<String, Object> body) {
+    public ResponseEntity<?> actualizarPerfilPropio(@PathVariable Integer id, @RequestBody UsuarioRequests.UpdateProfileRequest body) {
+        validator.validate(body);
         try {
-            String nombreCompleto = Objects.toString(body.getOrDefault("nombreCompleto", ""), "").trim();
-            String correo = Objects.toString(body.getOrDefault("correo", ""), "").trim().toLowerCase();
-            String telefono = Objects.toString(body.getOrDefault("telefono", ""), "").trim();
-            String dniRuc = Objects.toString(body.getOrDefault("dniRuc", ""), "").trim();
-
-            if (correo.isBlank() || correo.length() > 120 || !EMAIL_PATTERN.matcher(correo).matches()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El correo electrónico ingresado no tiene un formato válido.");
-            }
+            String nombreCompleto = body.nombreCompleto();
+            String correo = body.correo();
+            String telefono = body.telefono();
+            String dniRuc = body.dniRuc();
 
             String nombres = nombreCompleto;
             String apellidos = "";
@@ -324,11 +319,12 @@ public class UsuarioController {
     @PostMapping("/{id}/cambiar-clave")
     @PreAuthorize("@access.isSelf(#id, authentication)")
     @Transactional
-    public ResponseEntity<?> cambiarClavePropia(@PathVariable Integer id, @RequestBody Map<String, Object> body) {
+    public ResponseEntity<?> cambiarClavePropia(@PathVariable Integer id, @RequestBody UsuarioRequests.ChangePasswordRequest body) {
+        validator.validate(body);
         try {
             limiter.check("change-pass:" + id, 5);
-            String actual = Objects.toString(body.get("passwordActual"), "");
-            String nueva = Objects.toString(body.get("nuevaPassword"), "");
+            String actual = body.passwordActual();
+            String nueva = body.nuevaPassword();
             passwords.validate(nueva);
 
             String passDb = jdbcTemplate.queryForObject(

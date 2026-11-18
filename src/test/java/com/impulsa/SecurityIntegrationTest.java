@@ -29,7 +29,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.junit.jupiter.api.Assertions.*;
 
 @WebMvcTest(controllers = {AuthController.class, UsuarioController.class, TicketController.class, IncidenciaDashboardController.class, ClienteController.class, AdjuntoController.class, ReporteController.class})
-@Import({SecurityConfig.class, CorsConfig.class, ApiErrors.class, Access.class, AccountService.class, PasswordService.class, AttemptLimiter.class})
+@Import({SecurityConfig.class, CorsConfig.class, ApiErrors.class, RequestValidator.class, Access.class, AccountService.class, PasswordService.class, AttemptLimiter.class})
 class SecurityIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
@@ -393,5 +393,29 @@ class SecurityIntegrationTest {
                 .contentType("application/json")
                 .content("{\"nombreCompleto\":\"Rai De La Cruz\",\"correo\":\"correo_invalido_sin_arroba\",\"telefono\":\"960852454\",\"dniRuc\":\"70509616\"}"))
                 .andExpect(status().isBadRequest());
+    }
+    @Test void springValidationBlocksClientSideBypassOnRecoveryLoginAndUserAdmin() throws Exception {
+        mvc.perform(post("/api/auth/recuperar-clave").with(csrf()).contentType("application/json")
+                .content("{\"correo\":\"dasdasdadadsa\"}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/api/auth/login").with(csrf()).contentType("application/json")
+                .content("{\"identificador\":\"dasdasdadadsa\",\"password\":\"Password123!\"}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/api/auth/login").with(csrf()).contentType("application/json")
+                .content("{\"identificador\":\"USR-00109\",\"password\":\"Password123!\"}"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/auth/verify-2fa").with(csrf()).contentType("application/json")
+                .content("{\"codigoOtp\":\"abc\"}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/api/usuarios").with(actor(1, "ADMINISTRADOR")).with(csrf()).contentType("application/json")
+                .content("{\"nombres\":\"Juan\",\"correo\":\"texto_plano\",\"password\":\"Password123!\"}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(put("/api/usuarios/2").with(actor(1, "ADMINISTRADOR")).with(csrf()).contentType("application/json")
+                .content("{\"nombres\":\"Juan\",\"correo\":\"texto_plano\",\"rol\":\"EMPLEADO\"}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/api/config/smtp").with(actor(1, "ADMINISTRADOR")).with(csrf()).contentType("application/json")
+                .content("{\"host\":\"smtp.gmail.com\",\"port\":587,\"username\":\"no_es_correo\",\"password\":\"secret\"}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(email);
     }
 }

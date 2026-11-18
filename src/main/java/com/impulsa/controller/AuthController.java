@@ -1,8 +1,10 @@
 package com.impulsa.controller;
 
+import com.impulsa.dto.AuthRequests;
 import com.impulsa.security.*;
 import com.impulsa.service.EmailNotificationService;
 import jakarta.servlet.http.*;
+import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -48,7 +50,6 @@ public class AuthController {
             this.deadline = System.currentTimeMillis() + duration;
         }
     }
-    private String text(Map<String,Object> body, String key) { return Objects.toString(body.get(key), "").trim(); }
     private ResponseStatusException invalidCode() { return new ResponseStatusException(HttpStatus.BAD_REQUEST, "Código inválido, expirado o sin una verificación pendiente. Vuelve a iniciar el proceso."); }
     private String otp() { return String.valueOf(100000 + random.nextInt(900000)); }
 
@@ -62,13 +63,11 @@ public class AuthController {
     }
 
     @PostMapping("/register-cliente")
-    public ResponseEntity<?> register(@RequestBody Map<String,Object> body, HttpServletRequest request) {
+    public ResponseEntity<?> register(@Valid @RequestBody AuthRequests.RegisterClienteRequest body, HttpServletRequest request) {
         limiter.check("register:" + request.getRemoteAddr(), 10);
-        String name = text(body,"razonSocial"), document = text(body,"documento"), address = text(body,"correo").toLowerCase(Locale.ROOT);
-        String password = Objects.toString(body.get("password"), ""), phone = text(body,"telefono");
+        String name = body.razonSocial(), document = body.documento(), address = body.correo();
+        String password = body.password(), phone = body.telefono();
         passwords.validate(password);
-        if (name.isEmpty() || name.length() > 100 || !document.matches("(?:[0-9]{8}|[0-9]{11})") || !address.matches("[^\\s@]+@[^\\s@]+\\.[^\\s@]+") || address.length()>120)
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Revisa el nombre, documento y correo.");
         String hash = passwords.encode(password);
         transactions.executeWithoutResult(status -> {
             Integer role = jdbc.queryForObject("SELECT id_rol FROM roles WHERE nombre = 'CLIENTE'", Integer.class);
@@ -86,13 +85,13 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public ResponseEntity<?> login(@RequestBody Map<String,Object> body, HttpServletRequest request, HttpServletResponse response) {
-        String identifier = text(body,"identificador");
+    public ResponseEntity<?> login(@Valid @RequestBody AuthRequests.LoginRequest body, HttpServletRequest request, HttpServletResponse response) {
+        String identifier = body.identificador();
         limiter.check("login-ip:" + request.getRemoteAddr(), 40);
         limiter.check("login-user:" + identifier.toLowerCase(Locale.ROOT), 15);
         var found = identifier.length()>120 ? Optional.<Map<String,Object>>empty() : accounts.byLogin(identifier);
         var account = found.orElse(Map.of());
-        boolean matched = passwords.matches(Objects.toString(body.get("password"),""), accounts.hash(account));
+        boolean matched = passwords.matches(body.password(), accounts.hash(account));
         if (!matched || !Boolean.TRUE.equals(account.get("activo")))
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"Correo, código o contraseña incorrectos, o cuenta no disponible.");
         HttpSession session = request.getSession(true);
@@ -112,12 +111,12 @@ public class AuthController {
     }
 
     @PostMapping("/verify-2fa")
-    public ResponseEntity<?> verify(@RequestBody Map<String,Object> body, HttpServletRequest request, HttpServletResponse response) {
+    public ResponseEntity<?> verify(@Valid @RequestBody AuthRequests.Verify2FaRequest body, HttpServletRequest request, HttpServletResponse response) {
         limiter.check("verify:" + request.getRemoteAddr(),40);
         HttpSession session = request.getSession(false);
         if (session == null) throw invalidCode();
         synchronized(session) {
-            Challenge challenge = check(session,LOGIN,text(body,"codigoOtp"));
+            Challenge challenge = check(session,LOGIN,body.codigoOtp());
             var account = accounts.require(challenge.id);
             if (!accounts.hash(account).equals(challenge.version)) { session.removeAttribute(LOGIN); throw invalidCode(); }
             session.removeAttribute(LOGIN);
@@ -149,8 +148,8 @@ public class AuthController {
     }
 
     @PostMapping("/recuperar-clave")
-    public ResponseEntity<?> recover(@RequestBody Map<String,Object> body,HttpServletRequest request) {
-        String address = text(body,"correo").toLowerCase(Locale.ROOT);
+    public ResponseEntity<?> recover(@Valid @RequestBody AuthRequests.RecoverRequest body, HttpServletRequest request) {
+        String address = body.correo();
         limiter.check("recover-ip:"+request.getRemoteAddr(),10); limiter.check("recover-user:"+address,5);
         HttpSession session = request.getSession(true);
         synchronized(session) {
@@ -164,14 +163,14 @@ public class AuthController {
         return ResponseEntity.ok(Map.of("success",true,"mensaje","Si el correo corresponde a una cuenta activa, recibirás las instrucciones. Usa esta misma ventana para completar la recuperación."));
     }
     @PostMapping("/restablecer-clave")
-    public ResponseEntity<?> reset(@RequestBody Map<String,Object> body,HttpServletRequest request) {
-        String address = text(body,"correo").toLowerCase(Locale.ROOT);
+    public ResponseEntity<?> reset(@Valid @RequestBody AuthRequests.ResetPasswordRequest body, HttpServletRequest request) {
+        String address = body.correo();
         limiter.check("reset-ip:"+request.getRemoteAddr(),20); limiter.check("reset-user:"+address,5);
-        String password = Objects.toString(body.get("nuevaPassword"),""); passwords.validate(password);
+        String password = body.nuevaPassword(); passwords.validate(password);
         HttpSession session = request.getSession(false);
         if (session==null) throw invalidCode();
         synchronized(session) {
-            Challenge challenge=check(session,RESET,text(body,"codigoOtp"));
+            Challenge challenge=check(session,RESET,body.codigoOtp());
             if (challenge.id==0 || !challenge.email.equals(address)) throw invalidCode();
             var account=accounts.require(challenge.id);
             if (!accounts.hash(account).equals(challenge.version)) { session.removeAttribute(RESET); throw invalidCode(); }
