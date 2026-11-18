@@ -5,9 +5,11 @@ import com.impulsa.security.*;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.*;
 
@@ -168,7 +170,15 @@ public class IncidenciaDashboardController {
     @PreAuthorize("hasRole('ADMINISTRADOR')")
     public ResponseEntity<?> configurarSmtp(@RequestBody Map<String, Object> body) {
         String host = Objects.toString(body.getOrDefault("host", "smtp.gmail.com"), "smtp.gmail.com");
-        int port = Integer.parseInt(Objects.toString(body.getOrDefault("port", "587"), "587"));
+        int port;
+        try {
+            port = Integer.parseInt(Objects.toString(body.getOrDefault("port", "587"), "587").trim());
+        } catch (NumberFormatException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El puerto SMTP debe ser un número entero válido entre 1 y 65535.");
+        }
+        if (port < 1 || port > 65535) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El puerto SMTP debe estar comprendido estrictamente entre 1 y 65535.");
+        }
         String username = Objects.toString(body.getOrDefault("username", ""), "");
         String password = Objects.toString(body.getOrDefault("password", ""), "");
 

@@ -16,8 +16,14 @@ public class PasswordService {
         return encoder.matches(raw, encoded(hash) ? hash : dummy) && encoded(hash);
     }
     public void validate(String raw) {
-        if (raw == null || raw.length() < 8 || raw.getBytes(StandardCharsets.UTF_8).length > 72 || raw.isBlank())
+        if (raw == null || raw.isBlank() || raw.length() < 8 || raw.getBytes(StandardCharsets.UTF_8).length > 72)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "La contraseña debe tener al menos 8 caracteres y no superar 72 bytes.");
+        boolean hasUpper = raw.chars().anyMatch(Character::isUpperCase);
+        boolean hasLower = raw.chars().anyMatch(Character::isLowerCase);
+        boolean hasDigit = raw.chars().anyMatch(Character::isDigit);
+        boolean hasSpecial = raw.chars().anyMatch(c -> !Character.isLetterOrDigit(c) && !Character.isWhitespace(c));
+        if (!hasUpper || !hasLower || !hasDigit || !hasSpecial)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "La contraseña debe tener al menos 8 caracteres e incluir una mayúscula, una minúscula, un número y un carácter especial (@$!%*?&#...).");
     }
     public String encode(String raw) { validate(raw); return encoder.encode(raw); }
     public String migrate(String raw) {

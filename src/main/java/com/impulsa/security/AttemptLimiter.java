@@ -16,5 +16,8 @@ public class AttemptLimiter {
         Window result = windows.compute(key, (ignored, old) -> old == null || old.until() <= now ? new Window(now + 900000, 1) : new Window(old.until(), old.count() + 1));
         if (result.count() > maximum) throw limited();
     }
+    public void reset(String key) {
+        windows.remove(key);
+    }
     private ResponseStatusException limited() { return new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Demasiados intentos. Espera 15 minutos e inténtalo de nuevo."); }
 }

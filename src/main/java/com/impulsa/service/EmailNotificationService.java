@@ -1,17 +1,25 @@
 package com.impulsa.service;
 
 import jakarta.mail.internet.MimeMessage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Properties;
 
 @Service
 public class EmailNotificationService {
+
+    private static final Logger log = LoggerFactory.getLogger(EmailNotificationService.class);
+    private static final ZoneId ZONA_LIMA = ZoneId.of("America/Lima");
 
     private final BrevoEmailSender brevo;
 
@@ -47,8 +55,11 @@ public class EmailNotificationService {
     private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss");
 
     public void actualizarCredencialesSmtp(String host, int port, String username, String password) {
+        if (port < 1 || port > 65535) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El puerto SMTP debe estar comprendido estrictamente entre 1 y 65535.");
+        }
         if (host != null && !host.isBlank()) this.smtpHost = host.trim();
-        if (port > 0) this.smtpPort = port;
+        this.smtpPort = port;
         this.smtpUsername = username != null ? username.trim() : "";
         this.smtpPassword = password != null ? password.replace(" ", "").trim() : "";
     }
@@ -99,7 +110,7 @@ public class EmailNotificationService {
      * 2. Envía un aviso al correo del usuario cuando alguien ha ingresado a su cuenta
      */
     public boolean enviarAlertaInicioSesion(String correoDestino, String nombreUsuario, String ip, String dispositivo) {
-        String fechaHora = LocalDateTime.now().format(FMT);
+        String fechaHora = LocalDateTime.now(ZONA_LIMA).format(FMT);
         String asunto = "[IMPULSA A365] Alerta de Seguridad: Nuevo inicio de sesión en tu cuenta";
         String html = """
                 <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
@@ -179,21 +190,16 @@ public class EmailNotificationService {
             helper.setSubject(asunto);
             helper.setText(html, true);
             dynamicSender.send(message);
-            System.out.println("✅ [SMTP REAL] Correo entregado exitosamente a: " + destino);
+            log.info("[SMTP REAL] Correo entregado exitosamente a: {}", destino);
             return true;
         } catch (Exception e) {
-            System.err.println("⚠️ [SMTP] Error enviando a " + destino + ": " + e.getMessage());
+            log.error("[SMTP] Error enviando a {}: {}", destino, e.getMessage());
             return false;
         }
     }
 
     private void imprimirEnConsola(String tipo, String destino, String asunto, String detalle) {
         if (!logCodes) return;
-        System.out.println("\n======================================================================");
-        System.out.println("📧 [DESPACHO DE CORREO - " + tipo + "]");
-        System.out.println("Destinatario : " + destino);
-        System.out.println("Asunto       : " + asunto);
-        System.out.println("Contenido    : " + detalle);
-        System.out.println("======================================================================\n");
+        log.debug("[DESPACHO DE CORREO - {}] Destinatario: {} | Asunto: {} | Contenido: {}", tipo, destino, asunto, detalle);
     }
 }

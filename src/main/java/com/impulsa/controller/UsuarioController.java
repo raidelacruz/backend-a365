@@ -2,13 +2,17 @@ package com.impulsa.controller;
 
 import com.impulsa.security.*;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.*;
+import java.util.regex.Pattern;
 import java.text.Normalizer;
 
 @RestController
@@ -16,9 +20,13 @@ import java.text.Normalizer;
 @PreAuthorize("hasRole('ADMINISTRADOR')")
 public class UsuarioController {
 
+    private static final Pattern EMAIL_PATTERN = Pattern.compile("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$");
+
     @Autowired
     private JdbcTemplate jdbcTemplate;
     @Autowired private PasswordService passwords;
+    @Autowired private AttemptLimiter limiter;
+    @Autowired private Access access;
 
     /** Catálogo inicial más las áreas existentes, sin modificar registros históricos. */
     @GetMapping("/departamentos")
@@ -271,6 +279,10 @@ public class UsuarioController {
             String telefono = Objects.toString(body.getOrDefault("telefono", ""), "").trim();
             String dniRuc = Objects.toString(body.getOrDefault("dniRuc", ""), "").trim();
 
+            if (correo.isBlank() || correo.length() > 120 || !EMAIL_PATTERN.matcher(correo).matches()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El correo electrónico ingresado no tiene un formato válido.");
+            }
+
             String nombres = nombreCompleto;
             String apellidos = "";
             int spaceIdx = nombreCompleto.indexOf(' ');
@@ -314,6 +326,7 @@ public class UsuarioController {
     @Transactional
     public ResponseEntity<?> cambiarClavePropia(@PathVariable Integer id, @RequestBody Map<String, Object> body) {
         try {
+            limiter.check("change-pass:" + id, 5);
             String actual = Objects.toString(body.get("passwordActual"), "");
             String nueva = Objects.toString(body.get("nuevaPassword"), "");
             passwords.validate(nueva);
@@ -326,6 +339,7 @@ public class UsuarioController {
             }
 
             jdbcTemplate.update("UPDATE usuarios SET password_hash = ?, actualizado_en = CURRENT_TIMESTAMP WHERE id_usuario = ?", passwords.encode(nueva), id);
+            limiter.reset("change-pass:" + id);
             return ResponseEntity.ok(Map.of("success", true, "mensaje", "Contraseña actualizada correctamente en Supabase."));
         } catch (Exception e) {
             if (e instanceof org.springframework.web.server.ResponseStatusException status) throw status;
@@ -380,6 +394,9 @@ public class UsuarioController {
     @PatchMapping("/{id}/estado")
     public ResponseEntity<?> cambiarEstadoUsuario(@PathVariable Integer id, @RequestBody Map<String, Object> body) {
         try {
+            if (access.isSelf(id, SecurityContextHolder.getContext().getAuthentication())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "No puedes desactivar ni alterar el estado de tu propia cuenta de administrador.");
+            }
             Boolean activo = Boolean.valueOf(Objects.toString(body.get("activo"), "true"));
             jdbcTemplate.update("UPDATE usuarios SET activo = ?, actualizado_en = CURRENT_TIMESTAMP WHERE id_usuario = ?", activo, id);
             return ResponseEntity.ok(Map.of(

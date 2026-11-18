@@ -353,4 +353,45 @@ class SecurityIntegrationTest {
         verify(email,never()).enviarCodigo2FA(anyString(),anyString(),anyString());
         mvc.perform(get("/api/auth/me").session(session)).andExpect(status().isOk());
     }
+    @Test void passwordPolicyRequiresUppercaseLowercaseDigitAndSpecialChar() {
+        for (String weak : List.of("12345678", "abcdefgh", "Abcdefgh", "Abcdef12", "abcdef1!")) {
+            assertEquals(400, assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                    () -> passwords.validate(weak)).getStatusCode().value());
+        }
+        assertDoesNotThrow(() -> passwords.validate("Password123!"));
+    }
+    @Test void changePasswordIsRateLimitedAfterFiveAttempts() throws Exception {
+        when(jdbc.queryForObject("SELECT password_hash FROM usuarios WHERE id_usuario = ?", String.class, 6)).thenReturn(hash);
+        for (int i = 1; i <= 5; i++) {
+            mvc.perform(post("/api/usuarios/6/cambiar-clave").with(actor(6, "CLIENTE")).with(csrf())
+                    .contentType("application/json")
+                    .content("{\"passwordActual\":\"WrongPass1!\",\"nuevaPassword\":\"NewStrong123!\"}"))
+                    .andExpect(status().isBadRequest());
+        }
+        mvc.perform(post("/api/usuarios/6/cambiar-clave").with(actor(6, "CLIENTE")).with(csrf())
+                .contentType("application/json")
+                .content("{\"passwordActual\":\"WrongPass1!\",\"nuevaPassword\":\"NewStrong123!\"}"))
+                .andExpect(status().isTooManyRequests());
+    }
+    @Test void adminCannotModifyOwnAccountStatus() throws Exception {
+        mvc.perform(patch("/api/usuarios/1/estado").with(actor(1, "ADMINISTRADOR")).with(csrf())
+                .contentType("application/json").content("{\"activo\":false}"))
+                .andExpect(status().isConflict());
+    }
+    @Test void smtpConfigurationRejectsInvalidPortRange() throws Exception {
+        mvc.perform(post("/api/config/smtp").with(actor(1, "ADMINISTRADOR")).with(csrf())
+                .contentType("application/json")
+                .content("{\"host\":\"smtp.empresa.com\",\"port\":99999,\"username\":\"a@b.com\",\"password\":\"secret\"}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/api/config/smtp").with(actor(1, "ADMINISTRADOR")).with(csrf())
+                .contentType("application/json")
+                .content("{\"host\":\"smtp.empresa.com\",\"port\":0,\"username\":\"a@b.com\",\"password\":\"secret\"}"))
+                .andExpect(status().isBadRequest());
+    }
+    @Test void profileUpdateRejectsInvalidEmailFormat() throws Exception {
+        mvc.perform(put("/api/usuarios/6/perfil").with(actor(6, "CLIENTE")).with(csrf())
+                .contentType("application/json")
+                .content("{\"nombreCompleto\":\"Rai De La Cruz\",\"correo\":\"correo_invalido_sin_arroba\",\"telefono\":\"960852454\",\"dniRuc\":\"70509616\"}"))
+                .andExpect(status().isBadRequest());
+    }
 }
